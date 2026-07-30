@@ -27,27 +27,34 @@ def _migrate(conn):
     acc_cols = {c["name"] for c in conn.execute("PRAGMA table_info(accesorios)").fetchall()}
     if "etiqueta" not in acc_cols:
         conn.execute("ALTER TABLE accesorios ADD COLUMN etiqueta TEXT")
+    if "ip_address" not in acc_cols:
+        conn.execute("ALTER TABLE accesorios ADD COLUMN ip_address TEXT")
+    if "conexion" not in acc_cols:
+        conn.execute("ALTER TABLE accesorios ADD COLUMN conexion TEXT")
 
     conn.execute("DELETE FROM accesorios WHERE tipo = 'PARLANTE'")
 
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='accesorios'"
     ).fetchone()
-    if row and "PARLANTE" in (row["sql"] or ""):
+    sql = (row["sql"] or "") if row else ""
+    if row and ("IMPRESORA" not in sql or "PARLANTE" in sql):
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS accesorios_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pc_id INTEGER NOT NULL,
-                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM')),
+                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM', 'IMPRESORA')),
                 etiqueta TEXT,
                 marca TEXT,
                 modelo TEXT,
                 serie TEXT,
+                ip_address TEXT,
+                conexion TEXT,
                 FOREIGN KEY (pc_id) REFERENCES pcs(id) ON DELETE CASCADE
             );
-            INSERT INTO accesorios_new (id, pc_id, tipo, etiqueta, marca, modelo, serie)
-                SELECT id, pc_id, tipo, etiqueta, marca, modelo, serie FROM accesorios
-                WHERE tipo IN ('MONITOR', 'WEBCAM');
+            INSERT INTO accesorios_new (id, pc_id, tipo, etiqueta, marca, modelo, serie, ip_address, conexion)
+                SELECT id, pc_id, tipo, etiqueta, marca, modelo, serie, ip_address, conexion FROM accesorios
+                WHERE tipo IN ('MONITOR', 'WEBCAM', 'IMPRESORA');
             DROP TABLE accesorios;
             ALTER TABLE accesorios_new RENAME TO accesorios;
         """)
@@ -105,11 +112,13 @@ def init_db():
             CREATE TABLE IF NOT EXISTS accesorios (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pc_id INTEGER NOT NULL,
-                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM')),
+                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM', 'IMPRESORA')),
                 etiqueta TEXT,
                 marca TEXT,
                 modelo TEXT,
                 serie TEXT,
+                ip_address TEXT,
+                conexion TEXT,
                 FOREIGN KEY (pc_id) REFERENCES pcs(id) ON DELETE CASCADE
             );
 
@@ -323,12 +332,12 @@ def get_pc_by_id(pc_id):
 
 # --- Accesorios ---
 
-def insert_accesorio(pc_id, tipo, marca, modelo, serie, etiqueta=""):
+def insert_accesorio(pc_id, tipo, marca, modelo, serie, etiqueta="", ip_address="", conexion=""):
     with get_connection() as conn:
         cur = conn.execute(
-            """INSERT INTO accesorios (pc_id, tipo, etiqueta, marca, modelo, serie)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (pc_id, tipo, etiqueta, marca, modelo, serie),
+            """INSERT INTO accesorios (pc_id, tipo, etiqueta, marca, modelo, serie, ip_address, conexion)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (pc_id, tipo, etiqueta, marca, modelo, serie, ip_address, conexion),
         )
         return cur.lastrowid
 
@@ -380,6 +389,9 @@ def get_estadisticas_generales():
         total_webcams = conn.execute(
             "SELECT COUNT(*) AS c FROM accesorios WHERE tipo='WEBCAM'"
         ).fetchone()["c"]
+        total_impresoras = conn.execute(
+            "SELECT COUNT(*) AS c FROM accesorios WHERE tipo='IMPRESORA'"
+        ).fetchone()["c"]
 
         pcs = conn.execute("SELECT ram_gb, disco_detalle FROM pcs").fetchall()
         ram_groups, disco_groups = {}, {}
@@ -402,6 +414,7 @@ def get_estadisticas_generales():
             "total_pcs": total_pcs,
             "total_monitores": total_monitores,
             "total_webcams": total_webcams,
+            "total_impresoras": total_impresoras,
             "ram_groups": ram_groups,
             "disco_groups": disco_groups,
         }
@@ -414,7 +427,8 @@ def get_resumen_por_unidades():
                    COUNT(DISTINCT p.id) AS total_pcs,
                    COUNT(DISTINCT f.id) AS total_funcionarios,
                    SUM(CASE WHEN a.tipo='MONITOR' THEN 1 ELSE 0 END) AS monitores,
-                   SUM(CASE WHEN a.tipo='WEBCAM' THEN 1 ELSE 0 END) AS webcams
+                   SUM(CASE WHEN a.tipo='WEBCAM' THEN 1 ELSE 0 END) AS webcams,
+                   SUM(CASE WHEN a.tipo='IMPRESORA' THEN 1 ELSE 0 END) AS impresoras
             FROM unidades u
             LEFT JOIN pcs p ON p.unidad_id = u.id
             LEFT JOIN funcionarios f ON f.unidad_id = u.id

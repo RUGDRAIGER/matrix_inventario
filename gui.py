@@ -12,8 +12,39 @@ from ui_components import (
     MatrixLabel, ProgressPanel, ResponsiveModal,
     SectionTitle, StyledButton, StyledCombo, StyledEntry,
     accessory_block, apply_matrix_theme, create_matrix_tree,
-    form_field, page_toolbar, unit_selector,
+    form_field, form_field_grid, page_toolbar, printer_block, unit_selector,
 )
+
+
+def _default_impresora():
+    return [{
+        "tipo": "IMPRESORA", "etiqueta": "Impresora 1",
+        "marca": "", "modelo": "", "serie": "", "conexion": "", "ip_address": "",
+    }]
+
+
+def _fill_printer_blocks(container, items, hint_label=None):
+    """Renderiza bloques de impresora con campos visibles siempre."""
+    for w in container.winfo_children():
+        w.destroy()
+    blocks = []
+    display = items if items else _default_impresora()
+    if hint_label:
+        if items:
+            hint_label.configure(text=f"{len(items)} impresora(s) en linea detectada(s).")
+        else:
+            hint_label.configure(
+                text="Sin impresora en linea. Campos editables para registro manual o nuevo escaneo."
+            )
+    for pr in display:
+        title = pr.get("etiqueta") or "Impresora 1"
+        fields = printer_block(container, title)
+        for fld in ("marca", "modelo", "serie", "conexion", "ip_address"):
+            val = pr.get(fld, "")
+            if val:
+                fields[fld].insert(0, str(val))
+        blocks.append({"etiqueta": pr.get("etiqueta", title), "fields": fields})
+    return blocks
 
 
 def _default_accesorios():
@@ -21,6 +52,49 @@ def _default_accesorios():
         {"tipo": "MONITOR", "etiqueta": "Monitor 1", "marca": "", "modelo": "", "serie": ""},
         {"tipo": "WEBCAM", "etiqueta": "Webcam 1", "marca": "", "modelo": "", "serie": ""},
     ]
+
+
+PC_FIELD_SPECS = [
+    ("marca", "Marca"), ("modelo", "Modelo"),
+    ("serie", "Numero de Serie"), ("windows_version", "Version Windows"),
+    ("procesador", "Procesador"), ("ram_gb", "RAM (GB)"),
+    ("disco_detalle", "Almacenamiento"), ("office_version", "Microsoft Office"),
+    ("ip_address", "Direccion IP"), ("mac_address", "Direccion MAC"),
+]
+
+
+def _insert_accesorio_blocks(pc_id, acc_blocks, printer_blocks):
+    db.delete_accesorios_by_pc(pc_id)
+    for acc in acc_blocks:
+        f = acc["fields"]
+        db.insert_accesorio(
+            pc_id, acc["tipo"],
+            f["marca"].get(), f["modelo"].get(), f["serie"].get(),
+            etiqueta=acc["etiqueta"],
+        )
+    for pr in printer_blocks:
+        f = pr["fields"]
+        marca = f["marca"].get().strip()
+        modelo = f["modelo"].get().strip()
+        conexion = f["conexion"].get().strip().upper()
+        if not conexion and f["ip_address"].get().strip() not in ("", "N/A"):
+            conexion = "RED"
+        if not conexion and f["serie"].get().strip().upper().startswith(("USB", "DOT4")):
+            conexion = "USB"
+        if not marca and not modelo:
+            continue
+        if conexion not in ("USB", "RED"):
+            continue
+        ip = f["ip_address"].get().strip()
+        if conexion == "USB":
+            ip = "N/A"
+        db.insert_accesorio(
+            pc_id, "IMPRESORA",
+            marca, modelo, f["serie"].get().strip(),
+            etiqueta=pr["etiqueta"],
+            ip_address=ip,
+            conexion=conexion,
+        )
 
 
 def _load_unidades_combo(combo, var, ids_dict, reset=False):
@@ -165,6 +239,7 @@ class PCEditModal(ResponsiveModal):
         self.pc_id = pc_id
         self.on_saved_cb = on_saved
         self.acc_blocks = []
+        self.printer_blocks = []
 
         pc = db.get_pc_by_id(pc_id)
         accesorios = db.get_accesorios_by_pc(pc_id)
@@ -172,19 +247,17 @@ class PCEditModal(ResponsiveModal):
         unidad = db.get_unidad_by_id(pc["unidad_id"])
 
         SectionTitle(self.body, "Datos del PC").pack(anchor="w", pady=(0, 8))
-        self.fields = {}
-        for key, lbl in [
+        self.fields = form_field_grid(self.body, [
             ("marca", "Marca"), ("modelo", "Modelo"), ("serie", "Serie"),
             ("windows_version", "Windows"), ("procesador", "Procesador"),
             ("ram_gb", "RAM (GB)"), ("disco_detalle", "Almacenamiento"),
             ("office_version", "Office"), ("ip_address", "IP"), ("mac_address", "MAC"),
-            ("ubicacion", "Ubicación"),
-        ]:
-            e = form_field(self.body, lbl)
-            val = pc[key]
+            ("ubicacion", "Ubicacion"),
+        ], columns=2)
+        for key, entry in self.fields.items():
+            val = pc.get(key)
             if val is not None:
-                e.insert(0, str(val))
-            self.fields[key] = e
+                entry.insert(0, str(val))
 
         SectionTitle(self.body, "Accesorios").pack(anchor="w", pady=(12, 8))
         self.acc_container = ctk.CTkFrame(self.body, fg_color="transparent")
@@ -192,6 +265,14 @@ class PCEditModal(ResponsiveModal):
         items = [a for a in (accesorios if accesorios else _default_accesorios())
                  if a["tipo"] in ("MONITOR", "WEBCAM")]
         self._render_accesorios(items)
+
+        SectionTitle(self.body, "Impresora").pack(anchor="w", pady=(12, 8))
+        self.printer_container = ctk.CTkFrame(self.body, fg_color="transparent")
+        self.printer_container.pack(fill="x")
+        self.printer_hint = MatrixLabel(self.body, text="", dim=True)
+        self.printer_hint.pack(anchor="w", pady=(0, 4))
+        impresoras = [a for a in accesorios if a["tipo"] == "IMPRESORA"]
+        self._render_impresoras(impresoras)
 
         SectionTitle(self.body, "Personal a Cargo").pack(anchor="w", pady=(12, 4))
         self.func_var = tk.StringVar()
@@ -227,6 +308,11 @@ class PCEditModal(ResponsiveModal):
                 "fields": fields,
             })
 
+    def _render_impresoras(self, items):
+        self.printer_blocks = _fill_printer_blocks(
+            self.printer_container, items, self.printer_hint,
+        )
+
     def _save(self):
         data = {k: v.get().strip() for k, v in self.fields.items()}
         try:
@@ -235,14 +321,7 @@ class PCEditModal(ResponsiveModal):
             data["ram_gb"] = 0
         pc = db.get_pc_by_id(self.pc_id)
         db.update_pc(self.pc_id, pc["unidad_id"], data)
-        db.delete_accesorios_by_pc(self.pc_id)
-        for acc in self.acc_blocks:
-            f = acc["fields"]
-            db.insert_accesorio(
-                self.pc_id, acc["tipo"],
-                f["marca"].get(), f["modelo"].get(), f["serie"].get(),
-                etiqueta=acc["etiqueta"],
-            )
+        _insert_accesorio_blocks(self.pc_id, self.acc_blocks, self.printer_blocks)
         fid = self._func_map.get(self.func_var.get())
         db.set_pc_funcionarios(self.pc_id, [fid] if fid else [])
         self.on_saved_cb()
@@ -257,6 +336,7 @@ class ScannerPage(ctk.CTkFrame):
         self.refresh_callbacks = refresh_callbacks or {}
         self._scanning = False
         self.acc_blocks = []
+        self.printer_blocks = []
         self._unidad_ids = {}
         self._func_map = {}
         self.grid_rowconfigure(2, weight=1)
@@ -278,22 +358,23 @@ class ScannerPage(ctk.CTkFrame):
         scroll.grid(row=2, column=0, sticky="nsew", padx=PAD, pady=8)
 
         SectionTitle(scroll, "Datos del PC").pack(anchor="w", pady=(0, 8))
-        self.pc_fields = {}
-        for key, lbl in [
-            ("marca", "Marca"), ("modelo", "Modelo"), ("serie", "Número de Serie"),
-            ("windows_version", "Versión Windows"), ("procesador", "Procesador"),
-            ("ram_gb", "RAM (GB)"), ("disco_detalle", "Almacenamiento"),
-            ("office_version", "Microsoft Office"), ("ip_address", "Dirección IP"),
-            ("mac_address", "Dirección MAC"),
-        ]:
-            self.pc_fields[key] = form_field(scroll, lbl)
+        self.pc_fields = form_field_grid(scroll, PC_FIELD_SPECS, columns=2)
 
         SectionTitle(scroll, "Accesorios").pack(anchor="w", pady=(12, 8))
         self.acc_container = ctk.CTkFrame(scroll, fg_color="transparent")
         self.acc_container.pack(fill="x")
         self._render_accesorios(_default_accesorios())
 
-        SectionTitle(scroll, "Unidad y Asignación").pack(anchor="w", pady=(16, 8))
+        SectionTitle(scroll, "Impresora").pack(anchor="w", pady=(12, 8))
+        self.printer_container = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.printer_container.pack(fill="x")
+        self.printer_hint = MatrixLabel(
+            scroll, text="Al escanear se registran solo impresoras en linea por USB o RED.", dim=True,
+        )
+        self.printer_hint.pack(anchor="w", pady=(0, 8))
+        self._render_impresoras([])
+
+        SectionTitle(scroll, "Unidad y Asignacion").pack(anchor="w", pady=(16, 8))
 
         unidad_row = ctk.CTkFrame(scroll, fg_color="transparent")
         unidad_row.pack(fill="x", pady=(0, 8))
@@ -340,6 +421,11 @@ class ScannerPage(ctk.CTkFrame):
                 "etiqueta": acc.get("etiqueta", title),
                 "fields": fields,
             })
+
+    def _render_impresoras(self, items):
+        self.printer_blocks = _fill_printer_blocks(
+            self.printer_container, items, self.printer_hint,
+        )
 
     def refresh_unidades(self, reset=False):
         _load_unidades_combo(self.unidad_combo, self.unidad_var, self._unidad_ids, reset=reset)
@@ -417,6 +503,7 @@ class ScannerPage(ctk.CTkFrame):
             val = pc.get(key, "")
             entry.insert(0, str(val) if val is not None else "")
         self._render_accesorios(result["accesorios"])
+        self._render_impresoras(result.get("impresoras", []))
 
     def _save(self):
         unidad_id = self._unidad_ids.get(self.unidad_var.get())
@@ -432,13 +519,7 @@ class ScannerPage(ctk.CTkFrame):
             pc_data["ram_gb"] = 0
 
         pc_id = db.insert_pc(unidad_id, pc_data)
-        for acc in self.acc_blocks:
-            f = acc["fields"]
-            db.insert_accesorio(
-                pc_id, acc["tipo"],
-                f["marca"].get(), f["modelo"].get(), f["serie"].get(),
-                etiqueta=acc["etiqueta"],
-            )
+        _insert_accesorio_blocks(pc_id, self.acc_blocks, self.printer_blocks)
         fid = self._func_map.get(self.func_var.get())
         db.set_pc_funcionarios(pc_id, [fid] if fid else [])
 
@@ -452,6 +533,7 @@ class ScannerPage(ctk.CTkFrame):
             entry.delete(0, tk.END)
         self.ubicacion_entry.delete(0, tk.END)
         self._render_accesorios(_default_accesorios())
+        self._render_impresoras([])
         self.refresh_unidades(reset=True)
         self.progress.update_progress(0, "Listo para escanear")
 
@@ -575,7 +657,9 @@ class EquiposPage(ctk.CTkFrame):
         for pc in db.get_pcs_by_unidad(unidad_id):
             accs = db.get_accesorios_by_pc(pc["id"])
             acc_str = ", ".join(
-                f"{a.get('etiqueta') or a['tipo']}: {a['marca']}" for a in accs
+                f"{a.get('etiqueta') or a['tipo']}: {a['marca']}"
+                + (f" ({a.get('conexion') or ''})" if a["tipo"] == "IMPRESORA" else "")
+                for a in accs
             )
             self.tree.insert("", tk.END, values=(
                 pc["id"], pc["marca"], pc["modelo"], pc["serie"],
@@ -729,11 +813,12 @@ class StatsPage(ctk.CTkFrame):
 
         cards = ctk.CTkFrame(self.stats_frame, fg_color="transparent")
         cards.pack(fill="x", padx=PAD, pady=(0, 8))
-        cards.grid_columnconfigure(tuple(range(3)), weight=1)
+        cards.grid_columnconfigure(tuple(range(4)), weight=1)
         for i, (lbl, val) in enumerate([
             ("Total PCs", stats["total_pcs"]),
             ("Monitores", stats["total_monitores"]),
             ("Webcams", stats["total_webcams"]),
+            ("Impresoras", stats["total_impresoras"]),
         ]):
             card = ctk.CTkFrame(cards, fg_color=BG_ALT, corner_radius=8, border_width=2, border_color=ACCENT)
             card.grid(row=0, column=i, sticky="ew", padx=4, pady=4)
@@ -764,15 +849,15 @@ class StatsPage(ctk.CTkFrame):
 
         header = ctk.CTkFrame(self.units_frame, fg_color=BG_ALT, corner_radius=4)
         header.pack(fill="x", padx=PAD, pady=4)
-        for txt in ("Unidad", "PCs", "Funcionarios", "Monitores", "Webcams"):
-            MatrixLabel(header, text=txt, width=110, anchor="w").pack(side="left", padx=6, pady=8)
+        for txt in ("Unidad", "PCs", "Funcionarios", "Monitores", "Webcams", "Impresoras"):
+            MatrixLabel(header, text=txt, width=100, anchor="w").pack(side="left", padx=6, pady=8)
 
         for row in rows:
             rf = ctk.CTkFrame(self.units_frame, fg_color="transparent")
             rf.pack(fill="x", padx=PAD, pady=2)
             for val in (row["nombre_unidad"], row["total_pcs"], row["total_funcionarios"] or 0,
-                        row["monitores"] or 0, row["webcams"] or 0):
-                MatrixLabel(rf, text=str(val), width=110, anchor="w").pack(side="left", padx=6)
+                        row["monitores"] or 0, row["webcams"] or 0, row["impresoras"] or 0):
+                MatrixLabel(rf, text=str(val), width=100, anchor="w").pack(side="left", padx=6)
 
 
 class ConfigPage(ctk.CTkFrame):

@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import socket
 
@@ -339,6 +340,178 @@ def _scan_monitors_wmi(wmi_conn):
     return monitors
 
 
+VIRTUAL_PRINTER_HINTS = (
+    "pdf", "onenote", "fax", "xps", "virtual", "redirected",
+    "microsoft print to", "send to onenote", "snagit", "cutepdf",
+)
+VIRTUAL_PORT_PREFIXES = ("PORTPROMPT:", "NUL:", "FILE:", "SHAREDPTR")
+USB_PORT_PREFIXES = ("USB", "DOT4", "LPT", "COM")
+RED_PORT_PREFIXES = ("IP_", "WSD-", "TCP", "HPBD", "CNP", "IPP", "HTTP", "SNMP", "NCN")
+WMI_OFFLINE_STATUS = {6, 7}
+
+
+def _is_virtual_printer(name, port, driver=""):
+    text = f"{name} {driver} {port}".lower()
+    if any(hint in text for hint in VIRTUAL_PRINTER_HINTS):
+        return True
+    port_u = (port or "").upper()
+    return port_u.startswith(VIRTUAL_PORT_PREFIXES)
+
+
+def classify_printer_port(port_name):
+    """Clasifica puerto fisico: USB o RED. Retorna None si no aplica."""
+    port = (port_name or "").strip()
+    if not port:
+        return None
+    upper = port.upper()
+    if upper.startswith(VIRTUAL_PORT_PREFIXES):
+        return None
+    if upper.startswith(USB_PORT_PREFIXES):
+        return "USB", "N/A"
+    ip_match = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", port)
+    if ip_match:
+        return "RED", ip_match.group(1)
+    if upper.startswith(RED_PORT_PREFIXES):
+        return "RED", "N/A"
+    return None
+
+
+def _is_printer_online_wmi(pr):
+    if pr.WorkOffline:
+        return False
+    status = int(pr.PrinterStatus or 0)
+    return status not in WMI_OFFLINE_STATUS
+
+
+def _build_printer_record(name, port, driver, conexion, ip):
+    if _is_virtual_printer(name, port, driver):
+        return None
+    classified = classify_printer_port(port)
+    if not classified:
+        return None
+    conn_type, conn_ip = classified
+    if conexion not in ("USB", "RED"):
+        conexion = conn_type
+    if conexion == "USB":
+        ip = "N/A"
+    elif conexion == "RED":
+        if ip in ("", "N/A") and conn_ip not in ("", "N/A"):
+            ip = conn_ip
+    else:
+        return None
+    marca_src = (driver or name or "").strip()
+    marca = marca_src.split()[0] if marca_src else "N/A"
+    return {
+        "tipo": "IMPRESORA",
+        "marca": _safe(marca),
+        "modelo": _safe(name or driver),
+        "serie": port or "N/A",
+        "ip_address": _safe(ip if ip else "N/A"),
+        "conexion": conexion,
+    }
+
+
+def _scan_printers_wmi(wmi_conn):
+    printers = []
+    if not wmi_conn:
+        return printers
+    try:
+        for pr in wmi_conn.Win32_Printer():
+            if not _is_printer_online_wmi(pr):
+                continue
+            port = (pr.PortName or "").strip()
+            name = (pr.Name or "").strip()
+            driver = (pr.DriverName or "").strip()
+            classified = classify_printer_port(port)
+            if not classified:
+                continue
+            conn_type, ip = classified
+            record = _build_printer_record(name, port, driver, conn_type, ip)
+            if record:
+                printers.append(record)
+    except Exception:
+        pass
+    return printers
+
+
+def _scan_printers_powershell():
+    script = r"""
+    function Get-PrinterIp($portName) {
+        if ($portName -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { return $Matches[1] }
+        $port = Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue
+        if ($port -and $port.PrinterHostAddress) { return $port.PrinterHostAddress }
+        return ''
+    }
+    $offline = @('Offline','Error','NotAvailable','ServerUnknown')
+    $results = @()
+    Get-Printer -ErrorAction SilentlyContinue | Where-Object {
+        $_.WorkOffline -eq $false -and ($offline -notcontains [string]$_.PrinterStatus)
+    } | ForEach-Object {
+        $port = $_.PortName
+        $name = $_.Name
+        $driver = $_.DriverName
+        $check = ($name + ' ' + $driver + ' ' + $port).ToLower()
+        if ($check -match 'pdf|onenote|fax|xps|virtual|microsoft print to|portprompt|nul:') { return }
+        $upper = ($port + '').ToUpper()
+        if ($upper -match '^(USB|DOT4|LPT|COM)') {
+            $conn = 'USB'
+            $ip = 'N/A'
+        } elseif ($upper -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' -or $upper -match '^(IP_|WSD-|TCP|HPBD|CNP|IPP|HTTP|SNMP|NCN)') {
+            $conn = 'RED'
+            $ip = Get-PrinterIp $port
+            if (-not $ip) { $ip = 'N/A' }
+        } else { return }
+        $marca = if ($driver) { ($driver -split '\s+')[0] } else { 'N/A' }
+        $results += [PSCustomObject]@{
+            Marca    = $marca
+            Modelo   = $name
+            Conexion = $conn
+            IP       = $ip
+            Puerto   = $port
+        }
+    }
+    if ($results.Count -eq 0) { exit 0 }
+    $results | ConvertTo-Json -Compress
+    """
+    raw = _run_powershell(script)
+    printers = []
+    if not raw:
+        return printers
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            data = [data]
+        for item in data:
+            conn = _safe(item.get("Conexion", "")).upper()
+            if conn not in ("USB", "RED"):
+                continue
+            ip = _safe(item.get("IP", "N/A"))
+            port = _safe(item.get("Puerto", ""))
+            name = _safe(item.get("Modelo"))
+            driver = _safe(item.get("Marca"))
+            record = _build_printer_record(name, port, driver, conn, ip)
+            if record:
+                printers.append(record)
+    except Exception:
+        pass
+    return printers
+
+
+def _scan_printers(wmi_conn):
+    seen = set()
+    printers = []
+    for source in (_scan_printers_powershell(), _scan_printers_wmi(wmi_conn)):
+        for pr in source:
+            if pr.get("conexion") not in ("USB", "RED"):
+                continue
+            key = f"{pr['marca']}|{pr['modelo']}|{pr.get('serie', '')}".lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            printers.append(pr)
+    return printers
+
+
 def _scan_webcams(wmi_conn):
     webcams = []
     if not wmi_conn:
@@ -376,6 +549,15 @@ def _label_group(items, base_name, tipo):
     return items
 
 
+def _label_group_impresoras(items):
+    if not items:
+        return []
+    for i, item in enumerate(items, 1):
+        item["tipo"] = "IMPRESORA"
+        item["etiqueta"] = f"Impresora {i}"
+    return items
+
+
 def _normalize_accesorios(monitors, webcams):
     accesorios = []
     accesorios.extend(_label_group(monitors, "Monitor", "MONITOR"))
@@ -405,9 +587,12 @@ def scan_hardware(progress_callback=None):
     _report(progress_callback, 88, "Escaneando webcams...")
     webcams = _scan_webcams(wmi_conn)
 
+    _report(progress_callback, 94, "Escaneando impresoras activas...")
+    impresoras = _label_group_impresoras(_scan_printers(wmi_conn))
+
     accesorios = _normalize_accesorios(monitors, webcams)
     _report(progress_callback, 100, "Escaneo completado")
-    return {"pc": pc_data, "accesorios": accesorios}
+    return {"pc": pc_data, "accesorios": accesorios, "impresoras": impresoras}
 
 
 def scan_hardware_json(progress_callback=None):

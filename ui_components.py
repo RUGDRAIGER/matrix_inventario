@@ -226,6 +226,24 @@ def form_field(parent, label, entry_cls=StyledEntry, **entry_kw):
     return entry
 
 
+def form_field_grid(parent, field_specs, columns=2):
+    """Campos en grilla: 2 columnas por fila."""
+    grid = ctk.CTkFrame(parent, fg_color="transparent")
+    grid.pack(fill="x")
+    for c in range(columns):
+        grid.grid_columnconfigure(c, weight=1)
+    fields = {}
+    for i, (key, lbl) in enumerate(field_specs):
+        row, col = divmod(i, columns)
+        cell = ctk.CTkFrame(grid, fg_color="transparent")
+        cell.grid(row=row, column=col, sticky="ew", padx=(0, 6 if col == 0 else 0), pady=(0, 2))
+        MatrixLabel(cell, text=lbl, anchor="w").pack(fill="x", pady=(8, 2))
+        entry = StyledEntry(cell)
+        entry.pack(fill="x", pady=(0, 4))
+        fields[key] = entry
+    return fields
+
+
 def accessory_block(parent, title):
     """Bloque de accesorio con etiquetas Marca / Modelo / Serie."""
     MatrixLabel(parent, text=title).pack(anchor="w", pady=(8, 4))
@@ -240,6 +258,29 @@ def accessory_block(parent, title):
         e = StyledEntry(col)
         e.pack(fill="x", pady=(2, 0))
         fields[lbl.lower()] = e
+    return fields
+
+
+def printer_block(parent, title):
+    """Bloque impresora: Marca / Modelo / Serie / Conexion / IP."""
+    MatrixLabel(parent, text=title).pack(anchor="w", pady=(8, 4))
+    frm = ctk.CTkFrame(parent, fg_color=PANEL_ALT, corner_radius=6)
+    frm.pack(fill="x", pady=(0, 6))
+    frm.grid_columnconfigure((0, 1), weight=1)
+    fields = {}
+    specs = (
+        ("marca", "Marca"), ("modelo", "Modelo"),
+        ("serie", "Serie / Puerto"), ("conexion", "Conexion (USB o RED)"),
+        ("ip_address", "Direccion IP"),
+    )
+    for i, (key, lbl) in enumerate(specs):
+        row, col = divmod(i, 2)
+        col_frm = ctk.CTkFrame(frm, fg_color="transparent")
+        col_frm.grid(row=row, column=col, sticky="ew", padx=6, pady=6)
+        MatrixLabel(col_frm, text=lbl, dim=True).pack(anchor="w")
+        e = StyledEntry(col_frm)
+        e.pack(fill="x", pady=(2, 0))
+        fields[key] = e
     return fields
 
 
