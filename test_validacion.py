@@ -29,6 +29,7 @@ def run_tests():
             "windows_version": "Win11", "procesador": "i7", "ram_gb": 16,
             "disco_detalle": "SSD 512GB", "office_version": "365",
             "ip_address": "192.168.1.10", "mac_address": "aa:bb:cc:dd:ee:ff",
+            "ubicacion": "Oficina 101",
         })
         db.insert_accesorio(pc_id, "MONITOR", "LG", "24MP", "SN1", etiqueta="Monitor 1")
         db.insert_accesorio(pc_id, "MONITOR", "Samsung", "27", "SN2", etiqueta="Monitor 2")
@@ -38,32 +39,47 @@ def run_tests():
         if len(accs) != 2:
             errors.append(f"esperados 2 monitores, got {len(accs)}")
 
+        pcs = db.get_pcs_by_unidad(uid)
+        if not pcs or pcs[0].get("ubicacion") != "Oficina 101":
+            errors.append("ubicacion no guardada en equipo")
+
         stats = db.get_estadisticas_generales()
         if stats["total_pcs"] != 1 or stats["total_monitores"] != 2:
             errors.append("estadísticas incorrectas")
+        if "total_parlantes" in stats:
+            errors.append("parlantes no debe existir en stats")
+
+        db.update_unidad(uid, "Unidad Test 2", "CC-002", "Edificio B")
+        u = db.get_unidad_by_id(uid)
+        if u["nombre_unidad"] != "Unidad Test 2":
+            errors.append("update_unidad falló")
 
         db.delete_pc(pc_id)
         if db.get_accesorios_by_pc(pc_id):
             errors.append("cascade delete accesorios falló")
 
-        from scanner import scan_hardware, _normalize_accesorios
+        from scanner import _normalize_accesorios, _scan_network
         labeled = _normalize_accesorios(
             [{"tipo": "MONITOR", "marca": "A", "modelo": "B", "serie": "C"},
              {"tipo": "MONITOR", "marca": "D", "modelo": "E", "serie": "F"}],
-            [], [],
+            [],
         )
         if labeled[0]["etiqueta"] != "Monitor 1" or labeled[1]["etiqueta"] != "Monitor 2":
             errors.append("etiquetas de monitores incorrectas")
+        if any(a["tipo"] == "PARLANTE" for a in labeled):
+            errors.append("no debe haber parlantes")
 
-        from gui import InventarioApp
+        ip, mac = _scan_network()
+        if ip == "N/A":
+            errors.append("IP no detectada")
+
+        from gui import InventarioApp, EquiposPage, UnidadesPage
         print("GUI import OK")
 
     except Exception as ex:
         errors.append(str(ex))
     finally:
         db.DB_PATH = original
-        if db.DB_PATH.exists():
-            os.remove(db.DB_PATH)
 
     if errors:
         print("FALLÓ:", errors)

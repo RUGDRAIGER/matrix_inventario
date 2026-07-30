@@ -20,20 +20,31 @@ def _default_accesorios():
     return [
         {"tipo": "MONITOR", "etiqueta": "Monitor 1", "marca": "", "modelo": "", "serie": ""},
         {"tipo": "WEBCAM", "etiqueta": "Webcam 1", "marca": "", "modelo": "", "serie": ""},
-        {"tipo": "PARLANTE", "etiqueta": "Parlante 1", "marca": "", "modelo": "", "serie": ""},
     ]
 
 
-def _load_unidades_combo(combo, var, ids_dict):
+def _load_unidades_combo(combo, var, ids_dict, reset=False):
     unidades = db.get_unidades()
     names = [u["nombre_unidad"] for u in unidades]
     ids_dict.clear()
     ids_dict.update({u["nombre_unidad"]: u["id"] for u in unidades})
-    combo.configure(values=names if names else ["(Sin unidades)"])
+    placeholder = "(Seleccionar unidad)"
+    options = [placeholder] + names if names else [placeholder]
+    combo.configure(values=options)
+    current = var.get()
+    if reset:
+        var.set(placeholder)
+        return None, None
+    if current in ids_dict:
+        var.set(current)
+        return current, ids_dict[current]
+    if current == placeholder:
+        var.set(placeholder)
+        return None, None
     if names:
         var.set(names[0])
         return names[0], ids_dict[names[0]]
-    var.set("(Sin unidades)")
+    var.set(placeholder)
     return None, None
 
 
@@ -90,6 +101,39 @@ class FuncionarioModal(ResponsiveModal):
         self.destroy()
 
 
+class UnidadEditModal(ResponsiveModal):
+    def __init__(self, parent, unidad_id, on_save):
+        super().__init__(parent, "Editar Unidad", min_w=440, min_h=320)
+        self.unidad_id = unidad_id
+        self.on_save_cb = on_save
+        unidad = db.get_unidad_by_id(unidad_id)
+        self.fields = {}
+        for key, lbl in [
+            ("nombre_unidad", "Unidad"),
+            ("centro_costo", "Centro de Costo"),
+        ]:
+            e = form_field(self.body, lbl)
+            e.insert(0, unidad[key] or "")
+            self.fields[key] = e
+        self.btn_save.configure(command=self._save)
+
+    def _save(self):
+        data = {k: v.get().strip() for k, v in self.fields.items()}
+        if not data["nombre_unidad"]:
+            messagebox.showwarning("Validación", "El nombre de la Unidad es obligatorio.")
+            return
+        try:
+            u = db.get_unidad_by_id(self.unidad_id)
+            db.update_unidad(
+                self.unidad_id, data["nombre_unidad"], data["centro_costo"],
+                u.get("ubicacion") or "", u["sap"] or "",
+            )
+            self.on_save_cb()
+            self.destroy()
+        except Exception as ex:
+            messagebox.showerror("Error", f"No se pudo actualizar: {ex}")
+
+
 class UnidadModal(ResponsiveModal):
     def __init__(self, parent, on_save):
         super().__init__(parent, "Nueva Unidad", min_w=440, min_h=320)
@@ -98,7 +142,6 @@ class UnidadModal(ResponsiveModal):
         for key, lbl in [
             ("nombre_unidad", "Unidad"),
             ("centro_costo", "Centro de Costo"),
-            ("ubicacion", "Ubicación"),
         ]:
             self.fields[key] = form_field(self.body, lbl)
         self.btn_save.configure(command=self._save)
@@ -109,7 +152,7 @@ class UnidadModal(ResponsiveModal):
             messagebox.showwarning("Validación", "El nombre de la Unidad es obligatorio.")
             return
         try:
-            db.insert_unidad(data["nombre_unidad"], data["centro_costo"], data["ubicacion"])
+            db.insert_unidad(data["nombre_unidad"], data["centro_costo"], "")
             self.on_save_cb()
             self.destroy()
         except Exception as ex:
@@ -135,6 +178,7 @@ class PCEditModal(ResponsiveModal):
             ("windows_version", "Windows"), ("procesador", "Procesador"),
             ("ram_gb", "RAM (GB)"), ("disco_detalle", "Almacenamiento"),
             ("office_version", "Office"), ("ip_address", "IP"), ("mac_address", "MAC"),
+            ("ubicacion", "Ubicación"),
         ]:
             e = form_field(self.body, lbl)
             val = pc[key]
@@ -145,7 +189,8 @@ class PCEditModal(ResponsiveModal):
         SectionTitle(self.body, "Accesorios").pack(anchor="w", pady=(12, 8))
         self.acc_container = ctk.CTkFrame(self.body, fg_color="transparent")
         self.acc_container.pack(fill="x")
-        items = accesorios if accesorios else _default_accesorios()
+        items = [a for a in (accesorios if accesorios else _default_accesorios())
+                 if a["tipo"] in ("MONITOR", "WEBCAM")]
         self._render_accesorios(items)
 
         SectionTitle(self.body, "Personal a Cargo").pack(anchor="w", pady=(12, 4))
@@ -270,12 +315,14 @@ class ScannerPage(ctk.CTkFrame):
         StyledButton(func_row, text="+ Nuevo Funcionario", width=160, primary=False,
                       command=self._new_funcionario).grid(row=0, column=2, padx=(8, 0))
 
+        self.ubicacion_entry = form_field(scroll, "Ubicación")
+
         btn_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         btn_frame.pack(fill="x", pady=16)
         StyledButton(btn_frame, text="Guardar", command=self._save).pack(side="left", padx=(0, 8))
         StyledButton(btn_frame, text="Limpiar", primary=False, command=self._clear).pack(side="left")
 
-        self.refresh_unidades()
+        self.refresh_unidades(reset=True)
 
     def _render_accesorios(self, items):
         for w in self.acc_container.winfo_children():
@@ -294,9 +341,18 @@ class ScannerPage(ctk.CTkFrame):
                 "fields": fields,
             })
 
-    def refresh_unidades(self):
-        _load_unidades_combo(self.unidad_combo, self.unidad_var, self._unidad_ids)
-        self._refresh_funcionarios()
+    def refresh_unidades(self, reset=False):
+        _load_unidades_combo(self.unidad_combo, self.unidad_var, self._unidad_ids, reset=reset)
+        if reset:
+            self.func_combo.configure(values=["(Sin funcionarios)"])
+            self.func_var.set("(Sin funcionarios)")
+            self._func_map = {}
+        elif self.unidad_var.get() in self._unidad_ids:
+            self._refresh_funcionarios()
+        else:
+            self.func_combo.configure(values=["(Sin funcionarios)"])
+            self.func_var.set("(Sin funcionarios)")
+            self._func_map = {}
 
     def _on_unidad_change(self, _=None):
         self._refresh_funcionarios()
@@ -315,7 +371,7 @@ class ScannerPage(ctk.CTkFrame):
 
     def _new_unidad(self):
         def on_saved():
-            self.refresh_unidades()
+            self.refresh_unidades(reset=False)
             self.refresh_callbacks.get("unidades", lambda: None)()
         UnidadModal(self.winfo_toplevel(), on_save=on_saved)
 
@@ -364,11 +420,12 @@ class ScannerPage(ctk.CTkFrame):
 
     def _save(self):
         unidad_id = self._unidad_ids.get(self.unidad_var.get())
-        if not unidad_id:
+        if not unidad_id or self.unidad_var.get() == "(Seleccionar unidad)":
             messagebox.showwarning("Validación", "Debe seleccionar una Unidad.")
             return
 
         pc_data = {k: v.get().strip() for k, v in self.pc_fields.items()}
+        pc_data["ubicacion"] = self.ubicacion_entry.get().strip()
         try:
             pc_data["ram_gb"] = float(pc_data["ram_gb"]) if pc_data["ram_gb"] else 0
         except ValueError:
@@ -388,16 +445,83 @@ class ScannerPage(ctk.CTkFrame):
         messagebox.showinfo("Éxito", "Registro guardado correctamente.")
         for cb in self.refresh_callbacks.values():
             cb()
+        self._clear()
 
     def _clear(self):
         for entry in self.pc_fields.values():
             entry.delete(0, tk.END)
+        self.ubicacion_entry.delete(0, tk.END)
         self._render_accesorios(_default_accesorios())
-        self.func_var.set("")
+        self.refresh_unidades(reset=True)
         self.progress.update_progress(0, "Listo para escanear")
 
 
 class UnidadesPage(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color=BG)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self._build()
+
+    def _build(self):
+        toolbar = page_toolbar(self, "Gestión de Unidades", [
+            ("Nueva Unidad", self._new_unidad, True),
+            ("Editar", self._edit, False),
+            ("Eliminar", self._delete, False),
+        ])
+        toolbar.grid(row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, 8))
+
+        tree_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=8)
+        tree_frame.grid(row=1, column=0, sticky="nsew", padx=PAD, pady=(0, PAD))
+        inner = ctk.CTkFrame(tree_frame, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=8, pady=8)
+        self.tree = create_matrix_tree(
+            inner,
+            ("id", "nombre_unidad", "centro_costo"),
+            [("ID", 50), ("Unidad", 280), ("Centro de Costo", 200)],
+            stretch_col="nombre_unidad",
+        )
+        self.tree.bind("<Double-1>", lambda e: self._edit())
+        self.refresh()
+
+    def _new_unidad(self):
+        UnidadModal(self.winfo_toplevel(), on_save=self.refresh)
+
+    def refresh(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for u in db.get_unidades():
+            self.tree.insert("", tk.END, values=(
+                u["id"], u["nombre_unidad"], u["centro_costo"],
+            ))
+
+    def _selected_unidad_id(self):
+        sel = self.tree.selection()
+        return self.tree.item(sel[0])["values"][0] if sel else None
+
+    def _edit(self):
+        uid = self._selected_unidad_id()
+        if not uid:
+            messagebox.showinfo("Info", "Seleccione una unidad para editar.")
+            return
+        UnidadEditModal(self.winfo_toplevel(), uid, on_save=self.refresh)
+
+    def _delete(self):
+        uid = self._selected_unidad_id()
+        if not uid:
+            messagebox.showinfo("Info", "Seleccione una unidad para eliminar.")
+            return
+        u = db.get_unidad_by_id(uid)
+        if messagebox.askyesno(
+            "Confirmar",
+            f"¿Eliminar la unidad '{u['nombre_unidad']}'?\n"
+            "Se eliminarán también los PCs asociados.",
+        ):
+            db.delete_unidad(uid)
+            self.refresh()
+
+
+class EquiposPage(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color=BG)
         self._unidad_ids = {}
@@ -406,9 +530,8 @@ class UnidadesPage(ctk.CTkFrame):
         self._build()
 
     def _build(self):
-        toolbar = page_toolbar(self, "Gestión de Unidades", [
-            ("Nueva Unidad", self._new_unidad, True),
-            ("Editar", self._edit, False),
+        toolbar = page_toolbar(self, "Gestión de Equipos", [
+            ("Editar", self._edit, True),
             ("Eliminar PC", self._delete, False),
         ])
         toolbar.grid(row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, 8))
@@ -423,15 +546,13 @@ class UnidadesPage(ctk.CTkFrame):
         inner.pack(fill="both", expand=True, padx=8, pady=8)
         self.tree = create_matrix_tree(
             inner,
-            ("id", "marca", "modelo", "serie", "accesorios"),
-            [("ID", 50), ("Marca", 120), ("Modelo", 150), ("Serie", 150), ("Accesorios", 300)],
+            ("id", "marca", "modelo", "serie", "procesador", "ram_gb", "ip_address", "ubicacion", "accesorios"),
+            [("ID", 45), ("Marca", 90), ("Modelo", 110), ("Serie", 100),
+             ("Procesador", 120), ("RAM", 50), ("IP", 95), ("Ubicación", 110), ("Accesorios", 150)],
             stretch_col="accesorios",
         )
         self.tree.bind("<Double-1>", lambda e: self._edit())
         self.refresh()
-
-    def _new_unidad(self):
-        UnidadModal(self.winfo_toplevel(), on_save=self.refresh)
 
     def refresh(self):
         _load_unidades_combo(self.unidad_combo, self.unidad_var, self._unidad_ids)
@@ -454,9 +575,13 @@ class UnidadesPage(ctk.CTkFrame):
         for pc in db.get_pcs_by_unidad(unidad_id):
             accs = db.get_accesorios_by_pc(pc["id"])
             acc_str = ", ".join(
-                f"{a.get('etiqueta') or a['tipo']}: {a['marca']} {a['modelo']}" for a in accs
+                f"{a.get('etiqueta') or a['tipo']}: {a['marca']}" for a in accs
             )
-            self.tree.insert("", tk.END, values=(pc["id"], pc["marca"], pc["modelo"], pc["serie"], acc_str))
+            self.tree.insert("", tk.END, values=(
+                pc["id"], pc["marca"], pc["modelo"], pc["serie"],
+                pc["procesador"], pc["ram_gb"], pc["ip_address"],
+                pc["ubicacion"] or "", acc_str,
+            ))
 
     def _selected_pc_id(self):
         sel = self.tree.selection()
@@ -604,12 +729,11 @@ class StatsPage(ctk.CTkFrame):
 
         cards = ctk.CTkFrame(self.stats_frame, fg_color="transparent")
         cards.pack(fill="x", padx=PAD, pady=(0, 8))
-        cards.grid_columnconfigure(tuple(range(4)), weight=1)
+        cards.grid_columnconfigure(tuple(range(3)), weight=1)
         for i, (lbl, val) in enumerate([
             ("Total PCs", stats["total_pcs"]),
             ("Monitores", stats["total_monitores"]),
             ("Webcams", stats["total_webcams"]),
-            ("Parlantes", stats["total_parlantes"]),
         ]):
             card = ctk.CTkFrame(cards, fg_color=BG_ALT, corner_radius=8, border_width=2, border_color=ACCENT)
             card.grid(row=0, column=i, sticky="ew", padx=4, pady=4)
@@ -640,14 +764,14 @@ class StatsPage(ctk.CTkFrame):
 
         header = ctk.CTkFrame(self.units_frame, fg_color=BG_ALT, corner_radius=4)
         header.pack(fill="x", padx=PAD, pady=4)
-        for txt in ("Unidad", "PCs", "Funcionarios", "Monitores", "Webcams", "Parlantes"):
+        for txt in ("Unidad", "PCs", "Funcionarios", "Monitores", "Webcams"):
             MatrixLabel(header, text=txt, width=110, anchor="w").pack(side="left", padx=6, pady=8)
 
         for row in rows:
             rf = ctk.CTkFrame(self.units_frame, fg_color="transparent")
             rf.pack(fill="x", padx=PAD, pady=2)
             for val in (row["nombre_unidad"], row["total_pcs"], row["total_funcionarios"] or 0,
-                        row["monitores"] or 0, row["webcams"] or 0, row["parlantes"] or 0):
+                        row["monitores"] or 0, row["webcams"] or 0):
                 MatrixLabel(rf, text=str(val), width=110, anchor="w").pack(side="left", padx=6)
 
 
@@ -675,6 +799,7 @@ class InventarioApp(ctk.CTk):
         nav_items = [
             ("scanner", "Escáner / Registro"),
             ("unidades", "Unidades"),
+            ("equipos", "Equipos"),
             ("funcionarios", "Funcionarios"),
             ("stats", "Estadísticas"),
         ]
@@ -686,10 +811,12 @@ class InventarioApp(ctk.CTk):
 
         self.funcionarios_page = FuncionariosPage(content)
         self.unidades_page = UnidadesPage(content)
+        self.equipos_page = EquiposPage(content)
         self.stats_page = StatsPage(content)
         callbacks = {
             "funcionarios": self.funcionarios_page.refresh,
             "unidades": self.unidades_page.refresh,
+            "equipos": self.equipos_page.refresh,
             "stats": self.stats_page.refresh,
         }
         self.scanner_page = ScannerPage(content, refresh_callbacks=callbacks)
@@ -697,6 +824,7 @@ class InventarioApp(ctk.CTk):
         self.pages = {
             "scanner": self.scanner_page,
             "unidades": self.unidades_page,
+            "equipos": self.equipos_page,
             "funcionarios": self.funcionarios_page,
             "stats": self.stats_page,
         }

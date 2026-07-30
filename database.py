@@ -4,23 +4,60 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent / "inventario.db"
 
 
+def _dict_row(cursor, row):
+    return {col[0]: row[i] for i, col in enumerate(cursor.description)}
+
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = _dict_row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def _migrate(conn):
-    func_cols = {c[1] for c in conn.execute("PRAGMA table_info(funcionarios)").fetchall()}
+    func_cols = {c["name"] for c in conn.execute("PRAGMA table_info(funcionarios)").fetchall()}
     if "unidad_id" not in func_cols:
         conn.execute(
             "ALTER TABLE funcionarios ADD COLUMN unidad_id INTEGER REFERENCES unidades(id)"
         )
 
-    acc_cols = {c[1] for c in conn.execute("PRAGMA table_info(accesorios)").fetchall()}
+    acc_cols = {c["name"] for c in conn.execute("PRAGMA table_info(accesorios)").fetchall()}
     if "etiqueta" not in acc_cols:
         conn.execute("ALTER TABLE accesorios ADD COLUMN etiqueta TEXT")
+
+    conn.execute("DELETE FROM accesorios WHERE tipo = 'PARLANTE'")
+
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='accesorios'"
+    ).fetchone()
+    if row and "PARLANTE" in (row["sql"] or ""):
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS accesorios_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pc_id INTEGER NOT NULL,
+                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM')),
+                etiqueta TEXT,
+                marca TEXT,
+                modelo TEXT,
+                serie TEXT,
+                FOREIGN KEY (pc_id) REFERENCES pcs(id) ON DELETE CASCADE
+            );
+            INSERT INTO accesorios_new (id, pc_id, tipo, etiqueta, marca, modelo, serie)
+                SELECT id, pc_id, tipo, etiqueta, marca, modelo, serie FROM accesorios
+                WHERE tipo IN ('MONITOR', 'WEBCAM');
+            DROP TABLE accesorios;
+            ALTER TABLE accesorios_new RENAME TO accesorios;
+        """)
+
+    pc_cols = {c["name"] for c in conn.execute("PRAGMA table_info(pcs)").fetchall()}
+    if "ubicacion" not in pc_cols:
+        conn.execute("ALTER TABLE pcs ADD COLUMN ubicacion TEXT")
+        conn.execute("""
+            UPDATE pcs SET ubicacion = (
+                SELECT ubicacion FROM unidades WHERE unidades.id = pcs.unidad_id
+            ) WHERE COALESCE(ubicacion, '') = ''
+        """)
 
 
 def init_db():
@@ -58,13 +95,14 @@ def init_db():
                 office_version TEXT,
                 ip_address TEXT,
                 mac_address TEXT,
+                ubicacion TEXT,
                 FOREIGN KEY (unidad_id) REFERENCES unidades(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS accesorios (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pc_id INTEGER NOT NULL,
-                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM', 'PARLANTE')),
+                tipo TEXT NOT NULL CHECK(tipo IN ('MONITOR', 'WEBCAM')),
                 etiqueta TEXT,
                 marca TEXT,
                 modelo TEXT,
@@ -129,6 +167,20 @@ def get_unidad_by_id(unidad_id):
         return conn.execute(
             "SELECT * FROM unidades WHERE id = ?", (unidad_id,)
         ).fetchone()
+
+
+def update_unidad(unidad_id, nombre, centro_costo, ubicacion, sap=""):
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE unidades SET nombre_unidad=?, centro_costo=?, sap=?, ubicacion=?
+               WHERE id=?""",
+            (nombre, centro_costo, sap, ubicacion, unidad_id),
+        )
+
+
+def delete_unidad(unidad_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM unidades WHERE id = ?", (unidad_id,))
 
 
 def get_unidad_id_by_name(nombre):
@@ -199,8 +251,8 @@ def insert_pc(unidad_id, data):
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO pcs (unidad_id, marca, modelo, serie, windows_version,
-               procesador, ram_gb, disco_detalle, office_version, ip_address, mac_address)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               procesador, ram_gb, disco_detalle, office_version, ip_address, mac_address, ubicacion)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 unidad_id,
                 data.get("marca", ""),
@@ -213,6 +265,7 @@ def insert_pc(unidad_id, data):
                 data.get("office_version", ""),
                 data.get("ip_address", ""),
                 data.get("mac_address", ""),
+                data.get("ubicacion", ""),
             ),
         )
         return cur.lastrowid
@@ -222,7 +275,8 @@ def update_pc(pc_id, unidad_id, data):
     with get_connection() as conn:
         conn.execute(
             """UPDATE pcs SET unidad_id=?, marca=?, modelo=?, serie=?, windows_version=?,
-               procesador=?, ram_gb=?, disco_detalle=?, office_version=?, ip_address=?, mac_address=?
+               procesador=?, ram_gb=?, disco_detalle=?, office_version=?, ip_address=?,
+               mac_address=?, ubicacion=?
                WHERE id=?""",
             (
                 unidad_id,
@@ -236,6 +290,7 @@ def update_pc(pc_id, unidad_id, data):
                 data.get("office_version", ""),
                 data.get("ip_address", ""),
                 data.get("mac_address", ""),
+                data.get("ubicacion", ""),
                 pc_id,
             ),
         )
@@ -249,7 +304,11 @@ def delete_pc(pc_id):
 def get_pcs_by_unidad(unidad_id):
     with get_connection() as conn:
         return conn.execute(
-            "SELECT * FROM pcs WHERE unidad_id = ? ORDER BY marca, modelo",
+            """SELECT p.*, u.nombre_unidad
+               FROM pcs p
+               JOIN unidades u ON u.id = p.unidad_id
+               WHERE p.unidad_id = ?
+               ORDER BY p.marca, p.modelo""",
             (unidad_id,),
         ).fetchall()
 
@@ -318,9 +377,6 @@ def get_estadisticas_generales():
         total_webcams = conn.execute(
             "SELECT COUNT(*) AS c FROM accesorios WHERE tipo='WEBCAM'"
         ).fetchone()["c"]
-        total_parlantes = conn.execute(
-            "SELECT COUNT(*) AS c FROM accesorios WHERE tipo='PARLANTE'"
-        ).fetchone()["c"]
 
         pcs = conn.execute("SELECT ram_gb, disco_detalle FROM pcs").fetchall()
         ram_groups, disco_groups = {}, {}
@@ -343,7 +399,6 @@ def get_estadisticas_generales():
             "total_pcs": total_pcs,
             "total_monitores": total_monitores,
             "total_webcams": total_webcams,
-            "total_parlantes": total_parlantes,
             "ram_groups": ram_groups,
             "disco_groups": disco_groups,
         }
@@ -356,8 +411,7 @@ def get_resumen_por_unidades():
                    COUNT(DISTINCT p.id) AS total_pcs,
                    COUNT(DISTINCT f.id) AS total_funcionarios,
                    SUM(CASE WHEN a.tipo='MONITOR' THEN 1 ELSE 0 END) AS monitores,
-                   SUM(CASE WHEN a.tipo='WEBCAM' THEN 1 ELSE 0 END) AS webcams,
-                   SUM(CASE WHEN a.tipo='PARLANTE' THEN 1 ELSE 0 END) AS parlantes
+                   SUM(CASE WHEN a.tipo='WEBCAM' THEN 1 ELSE 0 END) AS webcams
             FROM unidades u
             LEFT JOIN pcs p ON p.unidad_id = u.id
             LEFT JOIN funcionarios f ON f.unidad_id = u.id
