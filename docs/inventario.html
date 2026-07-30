@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Descargar Inventario.exe</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      background: #000;
+      color: #00ff66;
+      font-family: 'Share Tech Mono', Consolas, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 255, 102, 0.03) 0px,
+        rgba(0, 255, 102, 0.03) 1px,
+        transparent 1px,
+        transparent 3px
+      );
+      pointer-events: none;
+    }
+    .wrap {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      padding: 2rem;
+      max-width: 480px;
+    }
+    .badge {
+      display: inline-block;
+      border: 1px solid #00ff66;
+      padding: 0.35rem 0.8rem;
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      margin-bottom: 1.5rem;
+      color: #00bb55;
+    }
+    h1 {
+      font-size: clamp(1.4rem, 4vw, 2rem);
+      letter-spacing: 0.2em;
+      text-shadow: 0 0 12px rgba(0, 255, 102, 0.6);
+      margin-bottom: 0.75rem;
+    }
+    .sub {
+      color: #00bb55;
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      line-height: 1.7;
+      margin-bottom: 2rem;
+    }
+    .btn {
+      display: inline-block;
+      padding: 1.1rem 2.8rem;
+      background: #00ff66;
+      border: 2px solid #00ff66;
+      color: #000;
+      text-decoration: none;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: bold;
+      letter-spacing: 0.18em;
+      transition: all 0.25s ease;
+      box-shadow: 0 0 28px rgba(0, 255, 102, 0.45);
+    }
+    .btn:hover {
+      background: transparent;
+      color: #00ff66;
+      box-shadow: 0 0 40px rgba(0, 255, 102, 0.7);
+    }
+    .meta {
+      margin-top: 1.5rem;
+      font-size: 0.72rem;
+      color: #008844;
+      line-height: 1.8;
+    }
+    .back {
+      margin-top: 2.5rem;
+      font-size: 0.75rem;
+    }
+    .back a {
+      color: #00bb55;
+      text-decoration: none;
+      letter-spacing: 0.08em;
+    }
+    .back a:hover { color: #00ff66; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">SIN PYTHON</span>
+    <h1>INVENTARIO.EXE</h1>
+    <p class="sub">
+      Ejecutable portable para Windows 10/11.<br>
+      No requiere instalacion ni Python.
+    </p>
+    <a class="btn" href="https://github.com/RUGDRAIGER/matrix_inventario/releases/latest/download/Inventario.exe">
+      DESCARGAR INVENTARIO.EXE
+    </a>
+    <p class="meta">
+      ~27 MB · PyInstaller · 100% local<br>
+      Coloque el .exe en pendrive con <strong>inventario.db</strong><br>
+      o descargue el paquete completo con base de datos incluida.
+    </p>
+    <p class="back">
+      <a href="index.html">Paquete completo (ZIP + DB)</a>
+    </p>
+  </div>
+</body>
+</html>

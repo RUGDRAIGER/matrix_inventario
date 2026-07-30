@@ -2,10 +2,15 @@
 title Inventario TI - Matrix Edition
 cd /d "%~dp0"
 
+if exist "Inventario.exe" (
+    start "" "Inventario.exe"
+    exit /b 0
+)
+
 where python >nul 2>&1
 if errorlevel 1 (
-    echo Python no esta instalado en este equipo.
-    echo Instale Python 3.11+ desde https://www.python.org/downloads/
+    echo No se encontro Inventario.exe ni Python en este equipo.
+    echo Descargue Inventario.exe desde la pagina de descarga.
     pause
     exit /b 1
 )
