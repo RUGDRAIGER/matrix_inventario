@@ -775,6 +775,73 @@ class StatsPage(ctk.CTkFrame):
                 MatrixLabel(rf, text=str(val), width=110, anchor="w").pack(side="left", padx=6)
 
 
+class ConfigPage(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color=BG)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self._build()
+
+    def _build(self):
+        page_toolbar(self, "Configuración", []).grid(row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, 8))
+
+        panel = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=8)
+        panel.grid(row=1, column=0, sticky="nsew", padx=PAD, pady=(0, PAD))
+        panel.grid_columnconfigure(0, weight=1)
+
+        inner = ctk.CTkFrame(panel, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=PAD, pady=PAD)
+
+        SectionTitle(inner, "Modo Portable").pack(anchor="w", pady=(0, 12))
+        MatrixLabel(
+            inner,
+            text="Copie toda la carpeta del programa a un pendrive o disco portable.\n"
+                 "Ejecute Iniciar.bat para abrir la aplicación en cualquier PC con Python.",
+            justify="left",
+        ).pack(anchor="w", pady=(0, 16))
+
+        info = ctk.CTkFrame(inner, fg_color=BG_ALT, corner_radius=8, border_width=1, border_color=ACCENT)
+        info.pack(fill="x", pady=(0, 20))
+        MatrixLabel(info, text="Ruta de datos (base de datos):", dim=True).pack(anchor="w", padx=PAD, pady=(12, 4))
+        self.path_label = ctk.CTkLabel(
+            info, text=str(db.DB_PATH), font=FONT_MONO, text_color=ACCENT,
+            wraplength=700, justify="left",
+        )
+        self.path_label.pack(anchor="w", padx=PAD, pady=(0, 12))
+
+        SectionTitle(inner, "Base de Datos").pack(anchor="w", pady=(0, 12))
+
+        btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+        btn_row.pack(fill="x", pady=8)
+        StyledButton(
+            btn_row, text="Copia de Seguridad", width=200,
+            command=self._backup,
+        ).pack(side="left", padx=(0, 12))
+        StyledButton(
+            btn_row, text="Abrir Carpeta de Datos", width=200, primary=False,
+            command=self._open_folder,
+        ).pack(side="left")
+
+        MatrixLabel(
+            inner,
+            text="Las copias de seguridad se guardan en la subcarpeta /backups junto al programa.",
+            dim=True,
+        ).pack(anchor="w", pady=(16, 0))
+
+    def _backup(self):
+        try:
+            dest = db.backup_database()
+            messagebox.showinfo("Copia de seguridad", f"Respaldo creado correctamente:\n{dest}")
+        except Exception as ex:
+            messagebox.showerror("Error", f"No se pudo crear la copia:\n{ex}")
+
+    def _open_folder(self):
+        try:
+            db.open_data_folder()
+        except Exception as ex:
+            messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{ex}")
+
+
 class InventarioApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -802,6 +869,7 @@ class InventarioApp(ctk.CTk):
             ("equipos", "Equipos"),
             ("funcionarios", "Funcionarios"),
             ("stats", "Estadísticas"),
+            ("config", "Configuración"),
         ]
 
         content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
@@ -813,6 +881,7 @@ class InventarioApp(ctk.CTk):
         self.unidades_page = UnidadesPage(content)
         self.equipos_page = EquiposPage(content)
         self.stats_page = StatsPage(content)
+        self.config_page = ConfigPage(content)
         callbacks = {
             "funcionarios": self.funcionarios_page.refresh,
             "unidades": self.unidades_page.refresh,
@@ -827,6 +896,7 @@ class InventarioApp(ctk.CTk):
             "equipos": self.equipos_page,
             "funcionarios": self.funcionarios_page,
             "stats": self.stats_page,
+            "config": self.config_page,
         }
 
         for key, label in nav_items:

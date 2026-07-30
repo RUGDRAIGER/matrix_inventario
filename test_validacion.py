@@ -4,12 +4,14 @@ import tempfile
 from pathlib import Path
 
 import database as db
+import paths
 
 
 def run_tests():
     tmp = Path(tempfile.mkdtemp())
-    original = db.DB_PATH
-    db.DB_PATH = tmp / "test_inventario.db"
+    original = paths.DB_PATH
+    paths.DB_PATH = tmp / "test_inventario.db"
+    db.DB_PATH = paths.DB_PATH
     errors = []
 
     try:
@@ -73,12 +75,18 @@ def run_tests():
         if ip == "N/A":
             errors.append("IP no detectada")
 
-        from gui import InventarioApp, EquiposPage, UnidadesPage
+        from gui import InventarioApp, EquiposPage, UnidadesPage, ConfigPage
         print("GUI import OK")
+
+        paths.BACKUP_DIR = tmp / "backups"
+        backup_path = db.backup_database()
+        if not backup_path.exists():
+            errors.append("backup_database falló")
 
     except Exception as ex:
         errors.append(str(ex))
     finally:
+        paths.DB_PATH = original
         db.DB_PATH = original
 
     if errors:

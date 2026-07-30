@@ -1,7 +1,9 @@
 import sqlite3
-from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "inventario.db"
+import paths
+from paths import backup_database, open_data_folder, ensure_portable_dirs
+
+DB_PATH = paths.DB_PATH
 
 
 def _dict_row(cursor, row):
@@ -9,7 +11,7 @@ def _dict_row(cursor, row):
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(paths.DB_PATH)
     conn.row_factory = _dict_row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -61,6 +63,7 @@ def _migrate(conn):
 
 
 def init_db():
+    ensure_portable_dirs()
     with get_connection() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS unidades (
