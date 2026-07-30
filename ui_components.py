@@ -62,6 +62,20 @@ class StyledEntry(ctk.CTkEntry):
         )
 
 
+class StyledCheckBox(ctk.CTkCheckBox):
+    def __init__(self, master, **kwargs):
+        super().__init__(
+            master,
+            fg_color=ACCENT,
+            hover_color=ACCENT_DIM,
+            border_color=ACCENT,
+            checkmark_color=BG,
+            text_color=ACCENT,
+            font=FONT_UI,
+            **kwargs,
+        )
+
+
 class StyledButton(ctk.CTkButton):
     def __init__(self, master, primary=True, **kwargs):
         kwargs.setdefault("font", FONT_UI)

@@ -113,8 +113,10 @@ def run_tests():
         if ip == "N/A":
             errors.append("IP no detectada")
 
-        from gui import InventarioApp, EquiposPage, UnidadesPage, ConfigPage
-        from ui_components import form_field_grid, printer_block
+        from gui import InventarioApp, MantenimientoPage
+        from maintenance import format_bytes as fmt_b
+        if fmt_b(1024) != "1.0 KB":
+            errors.append("format_bytes fallo")
         print("GUI import OK")
 
         paths.BACKUP_DIR = tmp / "backups"

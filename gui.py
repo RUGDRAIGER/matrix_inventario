@@ -5,12 +5,13 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 import database as db
+from maintenance import format_bytes, run_maintenance
 from scanner import scan_hardware
 from ui_components import (
     ACCENT, ACCENT_DIM, BG, BG_ALT, PAD, PANEL, PANEL_ALT,
     FONT_TITLE, FONT_MONO,
     MatrixLabel, ProgressPanel, ResponsiveModal,
-    SectionTitle, StyledButton, StyledCombo, StyledEntry,
+    SectionTitle, StyledButton, StyledCheckBox, StyledCombo, StyledEntry,
     accessory_block, apply_matrix_theme, create_matrix_tree,
     form_field, form_field_grid, page_toolbar, printer_block, unit_selector,
 )
@@ -860,6 +861,163 @@ class StatsPage(ctk.CTkFrame):
                 MatrixLabel(rf, text=str(val), width=100, anchor="w").pack(side="left", padx=6)
 
 
+class MantenimientoPage(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color=BG)
+        self._running = False
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self._build()
+
+    def _build(self):
+        page_toolbar(self, "Mantenimiento del PC", [
+            ("Ejecutar Mantenimiento", self._run, True),
+        ]).grid(row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, 8))
+
+        self.progress = ProgressPanel(self)
+        self.progress.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, 8))
+        self.progress.hide()
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color=BG)
+        scroll.grid(row=2, column=0, sticky="nsew", padx=PAD, pady=(0, PAD))
+
+        clean_frame = ctk.CTkFrame(scroll, fg_color=PANEL, corner_radius=8)
+        clean_frame.pack(fill="x", pady=(0, 12))
+        inner_c = ctk.CTkFrame(clean_frame, fg_color="transparent")
+        inner_c.pack(fill="x", padx=PAD, pady=PAD)
+        SectionTitle(inner_c, "Limpieza de archivos").pack(anchor="w", pady=(0, 8))
+
+        self.opt_temp = tk.BooleanVar(value=True)
+        self.opt_prefetch = tk.BooleanVar(value=True)
+        self.opt_chrome = tk.BooleanVar(value=True)
+        self.opt_edge = tk.BooleanVar(value=True)
+        self.opt_recycle = tk.BooleanVar(value=True)
+
+        for var, text in [
+            (self.opt_temp, "Eliminar temporales (TEMP, %TEMP%, Windows\\Temp)"),
+            (self.opt_prefetch, "Limpiar Prefetch (C:\\Windows\\Prefetch)"),
+            (self.opt_chrome, "Chrome: cache y cookies (cierre el navegador)"),
+            (self.opt_edge, "Edge: cache y cookies (cierre el navegador)"),
+            (self.opt_recycle, "Vaciar papelera de reciclaje"),
+        ]:
+            StyledCheckBox(inner_c, text=text, variable=var).pack(anchor="w", pady=4)
+
+        perf_frame = ctk.CTkFrame(scroll, fg_color=PANEL, corner_radius=8)
+        perf_frame.pack(fill="x", pady=(0, 12))
+        inner_p = ctk.CTkFrame(perf_frame, fg_color="transparent")
+        inner_p.pack(fill="x", padx=PAD, pady=PAD)
+        SectionTitle(inner_p, "Optimizacion de rendimiento").pack(anchor="w", pady=(0, 8))
+
+        self.opt_dns = tk.BooleanVar(value=True)
+        self.opt_power = tk.BooleanVar(value=False)
+        self.opt_thumbs = tk.BooleanVar(value=True)
+        self.opt_visual = tk.BooleanVar(value=False)
+
+        for var, text in [
+            (self.opt_dns, "Vaciar cache DNS (ipconfig /flushdns)"),
+            (self.opt_power, "Activar plan de energia Alto rendimiento"),
+            (self.opt_thumbs, "Limpiar cache de miniaturas e iconos"),
+            (self.opt_visual, "Reducir efectos visuales (transparencia y animaciones)"),
+        ]:
+            StyledCheckBox(inner_p, text=text, variable=var).pack(anchor="w", pady=4)
+
+        tips_frame = ctk.CTkFrame(scroll, fg_color=PANEL_ALT, corner_radius=8,
+                                   border_width=1, border_color=ACCENT)
+        tips_frame.pack(fill="x", pady=(0, 8))
+        inner_t = ctk.CTkFrame(tips_frame, fg_color="transparent")
+        inner_t.pack(fill="x", padx=PAD, pady=PAD)
+        SectionTitle(inner_t, "Mas formas de mejorar el rendimiento").pack(anchor="w", pady=(0, 8))
+        tips = (
+            "• Desinstalar programas que no use (Configuracion > Aplicaciones).\n"
+            "• Revisar programas al inicio (Ctrl+Shift+Esc > Inicio).\n"
+            "• Mantener Windows Update al dia.\n"
+            "• Usar SSD como disco principal del sistema.\n"
+            "• Ampliar RAM si el PC queda lento con varias apps abiertas.\n"
+            "• Ejecutar mantenimiento con Chrome/Edge cerrados para limpiar cookies."
+        )
+        MatrixLabel(inner_t, text=tips, justify="left").pack(anchor="w")
+
+        log_frame = ctk.CTkFrame(scroll, fg_color=PANEL, corner_radius=8)
+        log_frame.pack(fill="both", expand=True)
+        SectionTitle(log_frame, "Registro de resultados").pack(anchor="w", padx=PAD, pady=(PAD, 4))
+        self.log_box = ctk.CTkTextbox(
+            log_frame, height=160, fg_color=BG_ALT, text_color=ACCENT,
+            border_color=ACCENT, border_width=1, font=FONT_MONO,
+        )
+        self.log_box.pack(fill="both", expand=True, padx=PAD, pady=(0, PAD))
+        self.log_box.configure(state="disabled")
+
+    def _get_options(self):
+        return {
+            "clean_temp": self.opt_temp.get(),
+            "clean_prefetch": self.opt_prefetch.get(),
+            "clean_chrome": self.opt_chrome.get(),
+            "clean_edge": self.opt_edge.get(),
+            "empty_recycle": self.opt_recycle.get(),
+            "flush_dns": self.opt_dns.get(),
+            "high_performance": self.opt_power.get(),
+            "clean_thumbnails": self.opt_thumbs.get(),
+            "optimize_visual": self.opt_visual.get(),
+        }
+
+    def _append_log(self, text):
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", text + "\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _run(self):
+        if self._running:
+            return
+        opts = self._get_options()
+        if not any(opts.values()):
+            messagebox.showwarning("Mantenimiento", "Seleccione al menos una opcion.")
+            return
+        if not messagebox.askyesno(
+            "Confirmar mantenimiento",
+            "Se eliminaran archivos temporales, cache de navegadores y cookies.\n"
+            "Las cookies cerraran sesiones web abiertas.\n\n"
+            "¿Desea continuar?",
+        ):
+            return
+
+        self._running = True
+        self.progress.show()
+        self.progress.update_progress(0, "Iniciando mantenimiento...")
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+
+        def progress_cb(pct, msg):
+            self.after(0, lambda: self.progress.update_progress(pct, msg))
+
+        def work():
+            try:
+                result = run_maintenance(opts, progress_cb=progress_cb)
+                self.after(0, lambda: self._done(result))
+            except Exception as ex:
+                self.after(0, lambda: messagebox.showerror("Error", str(ex)))
+                self.after(0, self._finish)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _done(self, result):
+        self._append_log(f"--- Mantenimiento completado — {format_bytes(result['total_freed'])} liberados ---")
+        for t in result["tasks"]:
+            icon = "[OK]" if t["ok"] else "[--]"
+            line = f"{icon} {t['name']}: {t['detail']}"
+            self._append_log(line)
+        self._finish()
+        messagebox.showinfo(
+            "Mantenimiento",
+            f"Proceso finalizado.\nEspacio liberado: {format_bytes(result['total_freed'])}",
+        )
+
+    def _finish(self):
+        self._running = False
+        self.after(1200, self.progress.hide)
+
+
 class ConfigPage(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color=BG)
@@ -954,6 +1112,7 @@ class InventarioApp(ctk.CTk):
             ("equipos", "Equipos"),
             ("funcionarios", "Funcionarios"),
             ("stats", "Estadísticas"),
+            ("mantenimiento", "Mantenimiento"),
             ("config", "Configuración"),
         ]
 
@@ -966,6 +1125,7 @@ class InventarioApp(ctk.CTk):
         self.unidades_page = UnidadesPage(content)
         self.equipos_page = EquiposPage(content)
         self.stats_page = StatsPage(content)
+        self.mantenimiento_page = MantenimientoPage(content)
         self.config_page = ConfigPage(content)
         callbacks = {
             "funcionarios": self.funcionarios_page.refresh,
@@ -981,6 +1141,7 @@ class InventarioApp(ctk.CTk):
             "equipos": self.equipos_page,
             "funcionarios": self.funcionarios_page,
             "stats": self.stats_page,
+            "mantenimiento": self.mantenimiento_page,
             "config": self.config_page,
         }
 
